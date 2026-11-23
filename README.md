@@ -7,8 +7,8 @@ A **cost center** is what a budget is set on: one Hermes profile by default, or 
 group of profiles and other spend sources (proxy keys, spawned coding tools,
 subscription runs) that bill to one budget.
 
-**Status: early development (phase 1, accounting).** It measures and shows
-spend. It doesn't enforce anything yet.
+**Status: early development.** Accounting works; enforcement (admission, pacing
+and the backstop) is built and ships switched off, in dry-run.
 
 ## What it does today
 
@@ -30,11 +30,8 @@ spend. It doesn't enforce anything yet.
 ## Planned
 
 1. ~~Accounting~~ (this release)
-2. **A backstop.** A model-endpoint check that refuses calls from a cost center
-   whose monthly budget is spent, with an error the agent treats as a billing
-   limit.
-3. **Admission and pacing.** New runs wait while a cost center is ahead of
-   pace, so a large backlog can't spend the month in its first days.
+2. ~~A backstop~~ and 3. ~~admission and pacing~~: built, shipped switched
+   off (see Enforce).
 4. **Spawned tools.** Coding agents a profile starts count against its budget.
 5. **Awareness.** An agent can see what it has left and plan around it.
 
@@ -71,6 +68,59 @@ The evaluator writes two things next to each other: the budget state
 The dashboard reads only those files. It never opens the ledger, so a ledger
 credential (for the `sql` or `litellm` source) belongs to the evaluator alone,
 and the dashboard needs read access to the state directory and nothing else.
+
+## Enforce
+
+Three enforcement points, all reading what the evaluator wrote. **Each one runs
+in dry-run until you switch it on:** it records what it would have done, so you
+can watch the decisions against the accounting first.
+
+```yaml
+enforce: {admission: false, backstop: false}   # flip each to true when ready
+```
+
+- **Admission**, before a kanban card's run starts:
+  `hermes-cost-centers admit --profile P --board B --task T` exits 0 to let the run
+  start, or 3 after it has **blocked** the card (the monthly budget is spent;
+  reason `[cost-centers] …`, block kind `capability`) or **held** it (ahead of
+  pace; `scheduled`, reason `[cost-centers:pace] …`, no alert). Call it from
+  whatever spawns your workers, and on 3 exit without starting one. Every
+  decision is appended to `<state dir>/admission.jsonl`. Any error means allow.
+- **The resume pass**, each evaluator cycle (`kanban: {resume: true}`): Hermes's
+  `scheduled` state has no wake-up time, so the evaluator releases the cards it
+  held once their cost center is back on pace, and its budget blocks on the 1st
+  or when you raise the budget. It touches only cards whose latest hold reason
+  starts with one of its two markers.
+- **The backstop**, at the model endpoint: with `state.sql` set, the evaluator
+  also writes a `budget_state` table (one row per source; DDL in
+  `hermes_cost_centers/sql_state.py`). `hermes_cost_centers.backstop.Backstop`
+  looks a call's source up there and, if its cost center is exhausted, refuses
+  with HTTP 402 and *"budget exhausted: … (hard billing limit)"*. It never raises
+  and fails open on a missing, stale or unreadable row.
+
+  ```python
+  # LiteLLM custom_auth, after you've resolved the caller's source:
+  from hermes_cost_centers.backstop import Backstop, HTTP_STATUS
+  BACKSTOP = Backstop(lambda: psycopg2.connect(DB_URL))
+  d = BACKSTOP.check(source)
+  if not d.allow:
+      raise ProxyException(message=d.message, type="budget_exceeded", param=None, code=HTTP_STATUS)
+  ```
+
+**Ship the backstop and admission together.** Hermes treats a 402 as a billing
+error and doesn't retry the call, but a kanban worker that stops on one exits as
+rate-limited, and its card is requeued about every 6 minutes without counting a
+failure. Admission is what blocks that card at its next start.
+
+**Urgent cards** may run ahead of pace, never past the monthly budget:
+
+```yaml
+urgent:
+  created_by: ["chat:*", "operator"]    # card creators who are the operator (fnmatch)
+  answered_by: [operator]               # a comment from these just before the latest
+                                        # unblock = the operator answered the card
+  title_markers: ["[time-critical]"]    # Hermes boards have no tags
+```
 
 ## Configure
 
