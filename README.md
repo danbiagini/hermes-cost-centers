@@ -66,6 +66,12 @@ hermes-cost-centers explain <cost-center>
 If the evaluator stops, the tab shows a red "out of date" banner after five
 intervals. It never goes quiet.
 
+The evaluator writes two things next to each other: the budget state
+(`state.path`) and each cost center's run detail (`<state dir>/runs/<YYYY-MM>/`).
+The dashboard reads only those files. It never opens the ledger, so a ledger
+credential (for the `sql` or `litellm` source) belongs to the evaluator alone,
+and the dashboard needs read access to the state directory and nothing else.
+
 ## Configure
 
 `<HERMES_HOME>/hermes-cost-centers/budgets.yaml` (or set

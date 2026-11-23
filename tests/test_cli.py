@@ -41,11 +41,11 @@ def test_loop_survives_a_failed_cycle(setup, monkeypatch):
     calls, sleeps = [], []
     real = cli.evaluate_once
 
-    def flaky(cfg):
+    def flaky(cfg, **kw):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("transient")
-        return real(cfg)
+        return real(cfg, **kw)
 
     class Stop(Exception):
         pass

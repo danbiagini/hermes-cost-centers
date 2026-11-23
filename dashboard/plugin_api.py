@@ -1,8 +1,9 @@
 """Budgets tab backend, mounted at /api/plugins/hermes-cost-centers/.
 
-Every handler is read-only. The figures come from the state the evaluator
-writes; the per-run detail reads the ledger through the same adapter code the
-evaluator uses, so the two can't disagree.
+Every handler is read-only, and every figure comes from files the evaluator
+writes: the budget state and each cost center's run detail. The dashboard never
+reads the ledger itself, so it holds no ledger credential, and its numbers
+can't disagree with the evaluator's.
 
 The plugin belongs in the launch (root) profile only. Its view is the
 operator's: it always shows every cost center, whatever profile the request is
@@ -23,9 +24,8 @@ if str(_REPO) not in sys.path:
 
 from hermes_cost_centers import config as config_mod  # noqa: E402
 from hermes_cost_centers import evaluator  # noqa: E402
-from hermes_cost_centers import runs as runs_mod  # noqa: E402
+from hermes_cost_centers import detail as detail_mod  # noqa: E402
 from hermes_cost_centers import state as state_mod  # noqa: E402
-from hermes_cost_centers.adapters import get_adapter  # noqa: E402
 from hermes_cost_centers.evaluator import Month  # noqa: E402
 
 router = APIRouter()
@@ -49,39 +49,30 @@ def get_state() -> dict:
             "age_seconds": state_mod.age_seconds(state), "state": state}
 
 
-def _month(label: str | None, cfg: config_mod.Config) -> tuple[Month, datetime]:
-    now = evaluator.utcnow()
+def _month_label(label: str | None, cfg: config_mod.Config) -> str:
     if not label:
-        month = Month.containing(now, cfg.timezone)
-    else:
-        try:
-            year, mon = (int(x) for x in label.split("-"))
-            month = Month.containing(datetime(year, mon, 15, tzinfo=cfg.timezone), cfg.timezone)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="month must be YYYY-MM") from exc
-    return month, min(now, month.end)
+        return Month.containing(evaluator.utcnow(), cfg.timezone).label
+    try:
+        year, mon = (int(x) for x in label.split("-"))
+        return Month.containing(datetime(year, mon, 15, tzinfo=cfg.timezone), cfg.timezone).label
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM") from exc
 
 
 @router.get("/cost-centers/{name}/runs")
 def get_runs(name: str, month: str | None = None, limit: int = 50) -> dict:
+    """Run detail as the evaluator last wrote it. The dashboard never reads
+    the ledger itself, so it needs no ledger credential."""
     cfg = _config()
-    center = cfg.cost_centers.get(name)
-    if center is None:
+    if name not in cfg.cost_centers:
         raise HTTPException(status_code=404, detail=f"no cost center {name!r}")
-    m, until = _month(month, cfg)
-    rows = [r for r in get_adapter(cfg).rows(m.start, until) if r.source in center.sources]
-    daily: dict[str, float] = {}
-    for r in rows:
-        day = r.ts.astimezone(cfg.timezone).strftime("%Y-%m-%d")
-        daily[day] = daily.get(day, 0.0) + (r.cost_usd or 0.0)
-    runs = runs_mod.build(rows)
-    return {
-        "cost_center": name,
-        "month": m.label,
-        "daily_usd": {d: round(v, 6) for d, v in sorted(daily.items())},
-        "run_count": len(runs),
-        "runs": [r.as_dict() for r in runs[: max(1, min(limit, 500))]],
-    }
+    label = _month_label(month, cfg)
+    d = detail_mod.read(cfg.runs_dir, label, name)
+    if d is None:
+        raise HTTPException(status_code=404, detail=f"no run detail for {name} in {label} yet")
+    d = dict(d)
+    d["runs"] = d.get("runs", [])[: max(1, min(limit, detail_mod.MAX_RUNS))]
+    return d
 
 
 @router.get("/unattributed")
