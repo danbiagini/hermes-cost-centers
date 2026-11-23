@@ -30,22 +30,42 @@ def _releasable(marker: str, c: Optional[dict]) -> bool:
     return not (c.get("pace") or {}).get("ahead_of_pace")
 
 
-def resume(cfg: Config, state: dict, board: Optional[Board] = None) -> list[dict]:
-    board = board or Board(cfg.kanban)
-    centers = state.get("cost_centers") or {}
-    released = []
+def _held_via_cli(board: Board) -> list[dict]:
+    """The slow path: one CLI call per board and status, and one per held card."""
+    out = []
     for name in board.boards():
-        for status, marker_ok in (("blocked", (BLOCK_MARKER,)), ("scheduled", (PACE_MARKER,))):
+        for status in ("blocked", "scheduled"):
             for card in board.cards(name, status):
                 task_id = card.get("id")
                 if not task_id:
                     continue
                 full = board.show(name, task_id)
                 marker = held_by_us(last_hold_reason(full))
-                if marker not in marker_ok:
-                    continue
-                center = cfg.center_for((full.get("task") or {}).get("assignee") or card.get("assignee") or "")
-                if _releasable(marker, centers.get(center) if center else None):
-                    board.unblock(name, task_id)
-                    released.append({"board": name, "task": task_id, "marker": marker, "cost_center": center})
+                if marker:
+                    out.append({"board": name, "id": task_id, "status": status,
+                                "assignee": (full.get("task") or {}).get("assignee") or card.get("assignee"),
+                                "marker": marker})
+    return out
+
+
+# A marker only counts on the state it belongs to: budget blocks are `blocked`,
+# pace holds are `scheduled`. Anything else was moved by someone else.
+_STATUS_FOR = {BLOCK_MARKER: "blocked", PACE_MARKER: "scheduled"}
+
+
+def resume(cfg: Config, state: dict, board: Optional[Board] = None) -> list[dict]:
+    board = board or Board(cfg.kanban)
+    centers = state.get("cost_centers") or {}
+    held = board.held_cards()
+    if held is None:
+        held = _held_via_cli(board)
+    released = []
+    for card in held:
+        if _STATUS_FOR.get(card["marker"]) != card["status"]:
+            continue
+        center = cfg.center_for(card.get("assignee") or "")
+        if _releasable(card["marker"], centers.get(center) if center else None):
+            board.unblock(card["board"], card["id"])
+            released.append({"board": card["board"], "task": card["id"], "marker": card["marker"],
+                             "cost_center": center})
     return released

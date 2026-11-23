@@ -103,6 +103,9 @@ class FakeBoard:
         self.cards_by = cards or {}   # (board, status) -> [card dicts with id, assignee, events]
         self.calls = []
 
+    def held_cards(self):
+        return None   # no direct read: exercises the CLI fallback
+
     def boards(self):
         return sorted({b for b, _ in self.cards_by})
 
@@ -325,3 +328,80 @@ class TestCli:
         faults = cli.publish(c, budget_state())
         assert faults and "budget table not written" in faults[0]
         assert (tmp_path / "s.json").exists()   # the file is written first regardless
+
+
+def make_board_db(path, cards):
+    """A kanban.db in Hermes's layout: tasks + task_events."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT)")
+    conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, run_id INT,"
+                 " kind TEXT, payload TEXT, created_at INTEGER)")
+    for task_id, status, assignee, events in cards:
+        conn.execute("INSERT INTO tasks VALUES (?,?,?,?)", (task_id, "t", assignee, status))
+        for i, (kind, reason) in enumerate(events):
+            conn.execute("INSERT INTO task_events (task_id, kind, payload, created_at) VALUES (?,?,?,?)",
+                         (task_id, kind, json.dumps({"reason": reason} if reason else {}), 1000 + i))
+    conn.commit()
+    conn.close()
+
+
+class TestDirectRead:
+    def home(self, tmp_path):
+        home = tmp_path / "kanban-home"
+        make_board_db(home / "kanban" / "boards" / "research" / "kanban.db", [
+            ("t_pace", "scheduled", "researcher", [("scheduled", f"{PACE_MARKER} ahead")]),
+            ("t_budget", "blocked", "researcher", [("blocked", f"{BLOCK_MARKER} spent")]),
+            ("t_human", "blocked", "researcher", [("blocked", "waiting on the operator")]),
+            # Ours once, then re-blocked for another reason: the latest reason decides.
+            ("t_reblocked", "blocked", "researcher", [("blocked", f"{BLOCK_MARKER} spent"), ("unblocked", None),
+                                                      ("blocked", "an agent asks something")]),
+            ("t_done", "done", "researcher", [("blocked", f"{BLOCK_MARKER} spent")]),
+        ])
+        (home / "kanban" / "boards" / "research" / "board.json").write_text("{}")
+        make_board_db(home / "kanban" / "boards" / "old" / "kanban.db", [
+            ("t_old", "blocked", "researcher", [("blocked", f"{BLOCK_MARKER} spent")])])
+        (home / "kanban" / "boards" / "old" / "board.json").write_text('{"archived": true}')
+        make_board_db(home / "kanban.db", [
+            ("t_default", "scheduled", "ops-bot", [("scheduled", f"{PACE_MARKER} ahead")])])
+        return home
+
+    def board(self, home, calls):
+        def runner(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return Board({"env": {"HERMES_KANBAN_HOME": str(home)}}, runner=runner)
+
+    def test_finds_only_our_holds_without_any_cli_call(self, tmp_path):
+        calls = []
+        held = self.board(self.home(tmp_path), calls).held_cards()
+        got = sorted((h["board"], h["id"], h["status"], h["marker"]) for h in held)
+        assert got == [
+            ("default", "t_default", "scheduled", PACE_MARKER),
+            ("research", "t_budget", "blocked", BLOCK_MARKER),
+            ("research", "t_pace", "scheduled", PACE_MARKER),
+        ]
+        assert calls == []   # archived board skipped, done card skipped, no process started
+
+    def test_resume_releases_through_the_cli_only(self, tmp_path):
+        calls = []
+        b = self.board(self.home(tmp_path), calls)
+        out = resume.resume(cfg(), budget_state(ahead=False), board=b)
+        assert sorted(r["task"] for r in out) == ["t_budget", "t_default", "t_pace"]
+        assert all(c[:2] == ["hermes", "kanban"] and "unblock" in c for c in calls)
+        assert len(calls) == 3
+
+    def test_still_ahead_keeps_the_pace_hold(self, tmp_path):
+        calls = []
+        out = resume.resume(cfg(), budget_state(ahead=True), board=self.board(self.home(tmp_path), calls))
+        assert sorted(r["task"] for r in out) == ["t_budget", "t_default"]   # ops-bot isn't ahead
+
+    def test_falls_back_when_the_schema_is_unknown(self, tmp_path):
+        home = tmp_path / "odd"
+        (home / "kanban" / "boards" / "x").mkdir(parents=True)
+        sqlite3.connect(home / "kanban" / "boards" / "x" / "kanban.db").execute("CREATE TABLE other (a)").connection.commit()
+        assert Board({"home": str(home)}).held_cards() is None
+
+    def test_no_home_means_fallback(self, monkeypatch):
+        monkeypatch.delenv("HERMES_KANBAN_HOME", raising=False)
+        assert Board({}).held_cards() is None
