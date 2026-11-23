@@ -96,6 +96,9 @@ def test_api_state_before_and_after_evaluate(configured, client):
 def test_api_runs(configured, client):
     from conftest import MONTH0, day
 
+    # Before the evaluator has run there is no detail to show.
+    assert client.get("/api/plugins/hermes-cost-centers/cost-centers/alpha/runs").status_code == 404
+    cli.main(["evaluate"])
     r = client.get(f"/api/plugins/hermes-cost-centers/cost-centers/alpha/runs?month={MONTH0:%Y-%m}")
     assert r.status_code == 200
     body = r.json()
@@ -133,3 +136,11 @@ def test_api_unattributed(configured, client):
     cli.main(["evaluate"])
     body = client.get("/api/plugins/hermes-cost-centers/unattributed").json()
     assert "default" in body["unattributed"]
+
+
+def test_api_runs_limit_and_other_month(configured, client):
+    cli.main(["evaluate"])
+    body = client.get("/api/plugins/hermes-cost-centers/cost-centers/alpha/runs?limit=1").json()
+    assert len(body["runs"]) == 1 and body["run_count"] > 1
+    r = client.get("/api/plugins/hermes-cost-centers/cost-centers/alpha/runs?month=2020-01")
+    assert r.status_code == 404 and "2020-01" in r.json()["detail"]

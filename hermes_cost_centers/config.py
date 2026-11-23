@@ -60,6 +60,10 @@ class Config:
     def state_path(self) -> Path:
         return Path(self.state.get("path", DEFAULT_STATE_PATH))
 
+    @property
+    def runs_dir(self) -> Path:
+        return Path(self.state.get("runs_dir") or self.state_path.parent / "runs")
+
 
 def default_config_path() -> Path:
     env = os.environ.get(ENV_CONFIG)

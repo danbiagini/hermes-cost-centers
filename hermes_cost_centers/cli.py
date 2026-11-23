@@ -6,10 +6,11 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config as config_mod
+from . import detail as detail_mod
 from . import runs as runs_mod
 from . import state as state_mod
 from .adapters import get_adapter
@@ -22,23 +23,34 @@ def _load(args) -> config_mod.Config:
                            check_perms=not args.skip_permission_check)
 
 
-def evaluate_once(cfg: config_mod.Config, now: datetime | None = None) -> dict:
+def evaluate_once(cfg: config_mod.Config, now: datetime | None = None,
+                  write_detail: bool = False) -> dict:
+    """Evaluate the current month. With ``write_detail``, also write each cost
+    center's run detail, and finish the previous month if it isn't yet."""
     now = now or evaluator.utcnow()
     month = Month.containing(now, cfg.timezone)
     adapter = get_adapter(cfg)
     rows = list(adapter.rows(month.start, now))
-    return evaluate(cfg, rows, now, ledger_name=adapter.name)
+    state = evaluate(cfg, rows, now, ledger_name=adapter.name)
+    if write_detail:
+        detail_mod.write(cfg.runs_dir, detail_mod.build(cfg, rows, month, now))
+        prev = Month.containing(month.start - timedelta(seconds=1), cfg.timezone)
+        if detail_mod.needs_final_write(cfg.runs_dir, cfg, prev):
+            prev_rows = list(adapter.rows(prev.start, prev.end))
+            detail_mod.write(cfg.runs_dir, detail_mod.build(cfg, prev_rows, prev, now))
+    return state
 
 
 def cmd_evaluate(args) -> int:
     cfg = _load(args)
     while True:
         try:
-            state = evaluate_once(cfg)
             if args.stdout:
+                state = evaluate_once(cfg)
                 json.dump(state, sys.stdout, indent=1, sort_keys=True)
                 print()
             else:
+                state = evaluate_once(cfg, write_detail=True)
                 state_mod.write(cfg.state_path, state)
         except Exception as exc:
             # A failed cycle leaves the last state in place; it goes stale and
