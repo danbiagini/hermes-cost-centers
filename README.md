@@ -24,8 +24,10 @@ and the backstop) is built and ships switched off, in dry-run.
   unpriced usage is marked incomplete, and its figure is a floor.
 - **A pace line.** By any point in the month, a cost center may have spent its
   pro-rata share of the budget plus some days of headroom (5 by default).
-  Unused allowance carries forward. Today the tab only shows the line;
-  holding new runs that are ahead of it comes in a later phase.
+  Unused allowance carries forward. Admission holds new runs that are ahead of
+  it (see Enforce).
+- **Awareness.** An optional plugin per profile lets the agent see its own
+  budget and this run's spend, so it can size its work to what's left.
 
 ## Planned
 
@@ -33,7 +35,7 @@ and the backstop) is built and ships switched off, in dry-run.
 2. ~~A backstop~~ and 3. ~~admission and pacing~~: built, shipped switched
    off (see Enforce).
 4. **Spawned tools.** Coding agents a profile starts count against its budget.
-5. **Awareness.** An agent can see what it has left and plan around it.
+5. ~~Awareness~~: built (see Awareness).
 
 Enforcement will run outside the agent's process, so an agent can't turn off
 its own budget.
@@ -121,6 +123,50 @@ urgent:
                                         # unblock = the operator answered the card
   title_markers: ["[time-critical]"]    # Hermes boards have no tags
 ```
+
+## Awareness
+
+`agent/` is a second, optional Hermes plugin, installed in each **budgeted
+profile** (not the root profile). It adds:
+
+- **`budget_status`**, a tool: the cost center's spend, budget and what's left,
+  what's available now under the pace line, and what this run has spent so far,
+  with subagents and compression continuations rolled in.
+- **A one-line note** at the start of each run, for example
+  `[budget] research: $20.00 of $50.00 spent this month, $30.00 left. $15.00
+  available now under the pace line.` At `wrap_up` it asks the agent to
+  checkpoint; when exhausted, to record where it is and stop starting new work.
+- **One note mid-run**, added to the next tool result, if the state gets worse
+  while the run is going (it reaches `wrap_up`, falls ahead of pace or is
+  exhausted). Once per change.
+
+It is **guidance only**, and says so to the model: enforcement is admission and
+the backstop, outside the agent. It uses only the standard library and reads two
+things, failing silently on either:
+
+- the evaluator's state file (`HERMES_COST_CENTERS_STATE`, default
+  `/var/lib/hermes-cost-centers/state.json`), which the profile's user must be
+  able to read. The evaluator writes it world-readable, and publishes its price
+  table in it so the plugin prices runs the same way;
+- the profile's own `state.db`, for this run's tokens.
+
+The agent's source is its profile name, or `HERMES_COST_CENTERS_SOURCE` when the
+ledger knows it by another name.
+
+```sh
+cp -r agent <profile home>/plugins/hermes-cost-centers-agent
+# in that profile's config.yaml:
+#   plugins:
+#     enabled: [hermes-cost-centers-agent]
+#   platform_toolsets:
+#     cli: [hermes-cli, cost_centers]
+```
+
+**Name the `cost_centers` toolset in the profile's `platform_toolsets.cli`.**
+A kanban dispatcher pins each worker's toolsets from the plugins *its own*
+process loaded; when the dispatcher runs in a profile without this plugin, the
+tool is left out of every worker unless the profile lists it by name. Interactive
+sessions in the profile get it either way.
 
 ## Configure
 

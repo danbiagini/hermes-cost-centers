@@ -17,6 +17,7 @@ from . import sql_state
 from . import runs as runs_mod
 from . import state as state_mod
 from .adapters import get_adapter
+from .pricing import PriceTable
 from . import evaluator
 from .evaluator import Month, evaluate
 
@@ -35,6 +36,9 @@ def evaluate_once(cfg: config_mod.Config, now: datetime | None = None,
     adapter = get_adapter(cfg)
     rows = list(adapter.rows(month.start, now))
     state = evaluate(cfg, rows, now, ledger_name=adapter.name)
+    # The agent plugin prices its own run's tokens with the same table, so the
+    # operator's overrides reach it without a second copy.
+    state["prices"] = PriceTable.from_config(cfg.pricing).published()
     if write_detail:
         detail_mod.write(cfg.runs_dir, detail_mod.build(cfg, rows, month, now))
         prev = Month.containing(month.start - timedelta(seconds=1), cfg.timezone)
