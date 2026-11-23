@@ -49,6 +49,11 @@ class PriceTable:
     def from_config(cls, pricing: dict[str, Any]) -> "PriceTable":
         return cls(overrides=pricing.get("models"), table_path=pricing.get("table"))
 
+    def published(self) -> dict[str, dict[str, float]]:
+        """The complete entries, as the state carries them for the agent plugin."""
+        return {m: {k: float(r[k]) for k in _RATES} for m, r in sorted(self.models.items())
+                if isinstance(r, dict) and all(r.get(k) is not None for k in _RATES)}
+
     def rates(self, model: str) -> Optional[dict[str, float]]:
         entry = self.models.get(model) or self.models.get(normalize_model(model))
         if not entry or any(entry.get(k) is None for k in _RATES):
