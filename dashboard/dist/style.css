@@ -17,6 +17,11 @@
 .hcc-bar-fill.hcc-over { background: rgb(220, 38, 38); }
 .hcc-bar-pace { position: absolute; top: -3px; width: 2px; height: 14px; background: currentColor; opacity: 0.6; }
 .hcc-detail { padding: 0.5rem 0; }
-.hcc-days { display: flex; align-items: flex-end; gap: 2px; height: 52px; margin-bottom: 0.5rem; }
-.hcc-day { flex: 1; max-width: 18px; background: rgb(59, 130, 246); border-radius: 2px 2px 0 0; }
+.hcc-chart { margin-bottom: 0.75rem; max-width: 720px; }
+.hcc-chart-head { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.85em; margin-bottom: 0.35rem; }
+.hcc-days { position: relative; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid rgba(127, 127, 127, 0.4); }
+.hcc-day { flex: 1; background: rgb(59, 130, 246); border-radius: 2px 2px 0 0; }
+.hcc-day-empty { background: rgba(127, 127, 127, 0.3); }
+.hcc-share { position: absolute; left: 0; right: 0; border-top: 1px dashed currentColor; opacity: 0.5; pointer-events: none; }
+.hcc-axis { display: flex; justify-content: space-between; font-size: 0.75em; opacity: 0.65; margin-top: 0.2rem; }
 .hcc-summary { padding: 0.5rem 0; opacity: 0.8; font-size: 0.9em; }

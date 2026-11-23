@@ -30,6 +30,20 @@
     return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
+  function ago(seconds) {
+    const s = Math.max(0, Math.round(seconds || 0));
+    if (s < 90) return s + "s ago";
+    const m = Math.round(s / 60);
+    if (m < 90) return m + " min ago";
+    const hrs = Math.round(m / 60);
+    if (hrs < 48) return hrs + " h ago";
+    return Math.round(hrs / 24) + " days ago";
+  }
+
+  function staleFor(seconds) {
+    return ago(seconds).replace(" ago", "");
+  }
+
   const STATE_LABEL = { ok: "OK", wrap_up: "Wrap up", exhausted: "Exhausted", unset: "No budget" };
 
   function Bar({ used, allowance, budget }) {
@@ -53,12 +67,43 @@
         a.crosses_target_at && h("div", null,
           h("div", null, a.crosses_target_at === "crossed" ? "Target crossed" : "Crosses target " + when(a.crosses_target_at)),
           h("div", { className: "hcc-muted" }, "at this month's rate")),
-        h("div", { className: "hcc-muted" }, "ledger: " + s.ledger + " · updated " + Math.round(data.age_seconds || 0) + "s ago")
+        h("div", { className: "hcc-muted" }, "ledger: " + s.ledger + " · updated " + ago(data.age_seconds))
       )
     );
   }
 
-  function Runs({ name }) {
+  // One bar per day of the month, so a bar's position is its date. Empty days
+  // show as a faint stub. The dashed line is the budget's even daily share.
+  function Daily({ month, daily, budget }) {
+    const parts = month.split("-");
+    const n = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+    const values = [];
+    for (let d = 1; d <= n; d++) {
+      const key = month + "-" + (d < 10 ? "0" + d : d);
+      values.push([d, key, daily[key] || 0]);
+    }
+    const share = budget ? budget / n : null;
+    const top = Math.max.apply(null, values.map(function (v) { return v[2]; }).concat([share || 0, 0.0001]));
+    const H = 56;
+    const total = values.reduce(function (t, v) { return t + v[2]; }, 0);
+    const label = function (d) { return new Date(Number(parts[0]), Number(parts[1]) - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+    return h("div", { className: "hcc-chart" },
+      h("div", { className: "hcc-chart-head" },
+        h("span", null, "Daily spend, " + month),
+        h("span", { className: "hcc-muted" }, "top of scale " + money(top) + " · month " + money(total))),
+      h("div", { className: "hcc-days", style: { height: H + "px" } },
+        values.map(function (v) {
+          return h("div", { key: v[1], className: "hcc-day" + (v[2] > 0 ? "" : " hcc-day-empty"), title: label(v[0]) + ": " + money(v[2]),
+            style: { height: (v[2] > 0 ? Math.max(2, (v[2] / top) * H) : 1) + "px" } });
+        }),
+        share !== null && h("div", { className: "hcc-share", style: { bottom: (share / top) * H + "px" }, title: "even daily share of the budget: " + money(share) })),
+      h("div", { className: "hcc-axis" },
+        h("span", null, label(1)), h("span", null, label(Math.ceil(n / 2))), h("span", null, label(n))),
+      share !== null && h("div", { className: "hcc-muted" }, "dashed line: even daily share of the budget (" + money(share) + ")")
+    );
+  }
+
+  function Runs({ name, budget }) {
     const [data, setData] = useState(null);
     const [err, setErr] = useState(null);
     useEffect(function () {
@@ -66,12 +111,8 @@
     }, [name]);
     if (err) return h("div", { className: "hcc-error" }, err);
     if (!data) return h("div", { className: "hcc-muted" }, "Loading runs…");
-    const days = Object.entries(data.daily_usd);
-    const max = Math.max.apply(null, days.map(function (d) { return d[1]; }).concat([0.0001]));
     return h("div", { className: "hcc-detail" },
-      h("div", { className: "hcc-days" }, days.map(function (d) {
-        return h("div", { key: d[0], className: "hcc-day", title: d[0] + ": " + money(d[1]), style: { height: Math.max(2, (d[1] / max) * 48) + "px" } });
-      })),
+      h(Daily, { month: data.month, daily: data.daily_usd, budget: budget }),
       h("table", { className: "hcc-table hcc-runs" },
         h("thead", null, h("tr", null, ["Started", "Cost", "Subagents", "Models", "Run"].map(function (t) { return h("th", { key: t }, t); }))),
         h("tbody", null, data.runs.map(function (r) {
@@ -107,7 +148,7 @@
               h("td", null, pace),
               h("td", null, c.runs));
             if (open !== name) return main;
-            return [main, h("tr", { key: name + "-detail" }, h("td", { colSpan: 7 }, h(Runs, { name: name })))];
+            return [main, h("tr", { key: name + "-detail" }, h("td", { colSpan: 7 }, h(Runs, { name: name, budget: c.budget_usd })))];
           }))
         ),
         rows.some(function (kv) { return kv[1].incomplete; }) &&
@@ -150,7 +191,7 @@
     if (!data) return h("div", { className: "hcc-page hcc-muted" }, "Loading…");
     if (!data.available) return h("div", { className: "hcc-page" }, h("div", { className: "hcc-banner" }, data.detail + " (" + data.state_path + ")"));
     return h("div", { className: "hcc-page" },
-      data.stale && h("div", { className: "hcc-banner" }, "The budget evaluator hasn't run for " + Math.round((data.age_seconds || 0) / 60) + " minutes. These figures are out of date."),
+      data.stale && h("div", { className: "hcc-banner" }, "The budget evaluator hasn't run for " + staleFor(data.age_seconds) + ". These figures are out of date."),
       h(Account, { data: data }),
       h(Centers, { state: data.state }),
       h(Unattributed, { state: data.state })
