@@ -10,7 +10,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config as config_mod
+from . import admission as admission_mod
 from . import detail as detail_mod
+from . import resume as resume_mod
+from . import sql_state
 from . import runs as runs_mod
 from . import state as state_mod
 from .adapters import get_adapter
@@ -41,9 +44,32 @@ def evaluate_once(cfg: config_mod.Config, now: datetime | None = None,
     return state
 
 
+def publish(cfg: config_mod.Config, state: dict) -> list[str]:
+    """Write the state everywhere its readers look, then release held cards.
+
+    The file is written first, so the tab stays current even if a later step
+    fails. Returns the failures; each is a fault, and the cycle exits non-zero.
+    """
+    state_mod.write(cfg.state_path, state)
+    faults = []
+    if cfg.state.get("sql"):
+        try:
+            sql_state.write(cfg.state["sql"], state, cfg.enforce.backstop)
+        except Exception as exc:
+            faults.append(f"budget table not written: {exc}")
+    if cfg.kanban.get("resume", False):
+        try:
+            for r in resume_mod.resume(cfg, state):
+                print(f"hermes-cost-centers: released {r['task']} on {r['board']} ({r['marker']})")
+        except Exception as exc:
+            faults.append(f"resume pass failed: {exc}")
+    return faults
+
+
 def cmd_evaluate(args) -> int:
     cfg = _load(args)
     while True:
+        rc = 0
         try:
             if args.stdout:
                 state = evaluate_once(cfg)
@@ -51,16 +77,36 @@ def cmd_evaluate(args) -> int:
                 print()
             else:
                 state = evaluate_once(cfg, write_detail=True)
-                state_mod.write(cfg.state_path, state)
+                for fault in publish(cfg, state):
+                    print(f"hermes-cost-centers: {fault}", file=sys.stderr)
+                    rc = 1
         except Exception as exc:
             # A failed cycle leaves the last state in place; it goes stale and
             # readers fail open. Exit non-zero so a scheduler sees the fault.
             print(f"hermes-cost-centers: evaluate failed: {exc}", file=sys.stderr)
-            if not args.loop:
-                return 1
+            rc = 1
         if not args.loop:
-            return 0
+            return rc
         time.sleep(cfg.interval_seconds)
+
+
+# Exit codes for `admit`, read by the spawn wrapper.
+ADMIT_START, ADMIT_HELD = 0, 3
+
+
+def cmd_admit(args) -> int:
+    """May this card's run start? 0 = start it; 3 = the card was held or blocked,
+    so don't start a worker. Fails open: any error prints and returns 0."""
+    try:
+        cfg = _load(args)
+        may_start, d, acted = admission_mod.admit(cfg, args.profile, args.board, args.task)
+        mode = "" if cfg.enforce.admission else " (dry run)"
+        verb = {"allow": "allow", "hold": "hold", "block": "block"}[d.action]
+        print(f"hermes-cost-centers admit{mode}: {verb} {args.task} for {args.profile}: {d.reason}")
+        return ADMIT_START if may_start else ADMIT_HELD
+    except Exception as exc:
+        print(f"hermes-cost-centers admit: failed open: {exc}", file=sys.stderr)
+        return ADMIT_START
 
 
 def _money(x) -> str:
@@ -152,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("status", help="show the last written state")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_status)
+
+    a = sub.add_parser("admit", help="admission check before a kanban card's run starts")
+    a.add_argument("--profile", required=True)
+    a.add_argument("--board", required=True)
+    a.add_argument("--task", required=True)
+    a.set_defaults(fn=cmd_admit)
 
     x = sub.add_parser("explain", help="where one cost center's spend went this month")
     x.add_argument("cost_center")

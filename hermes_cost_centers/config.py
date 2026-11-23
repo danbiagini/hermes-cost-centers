@@ -26,6 +26,32 @@ class Pace:
 
 
 @dataclass(frozen=True)
+class Enforce:
+    """Which enforcement points act. Off by default: each one logs what it would
+    have done until the operator switches it on, so the accounting can be watched
+    against the decisions first."""
+
+    admission: bool = False
+    backstop: bool = False
+
+
+@dataclass(frozen=True)
+class Urgent:
+    """Cards that may run ahead of pace. Nothing runs past the monthly budget.
+
+    - ``created_by``: card creators that are the operator (fnmatch patterns).
+    - ``answered_by``: comment authors whose comment just before the card's latest
+      unblock means the operator answered it, so a conversation isn't held midway.
+    - ``title_markers``: substrings of the title that mark a card time-critical
+      (Hermes boards have no tags).
+    """
+
+    created_by: tuple[str, ...] = ()
+    answered_by: tuple[str, ...] = ()
+    title_markers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CostCenter:
     name: str
     sources: tuple[str, ...]
@@ -49,6 +75,9 @@ class Config:
     pricing: dict[str, Any] = field(default_factory=dict)
     interval_seconds: int = 60
     path: Optional[Path] = None
+    enforce: "Enforce" = field(default_factory=lambda: Enforce())
+    urgent: "Urgent" = field(default_factory=lambda: Urgent())
+    kanban: dict[str, Any] = field(default_factory=dict)
 
     def center_for(self, source: str) -> Optional[str]:
         for center in self.cost_centers.values():
@@ -151,14 +180,46 @@ def parse(raw: Any, path: Optional[Path] = None) -> Config:
     if not isinstance(ledger, dict) or "source" not in ledger:
         raise ConfigError("ledger.source is required")
 
+    enforce_raw = raw.get("enforce") or {}
+    if not isinstance(enforce_raw, dict):
+        raise ConfigError("enforce: expected a mapping")
+    for k in ("admission", "backstop"):
+        if not isinstance(enforce_raw.get(k, False), bool):
+            raise ConfigError(f"enforce.{k}: expected true or false")
+    urgent_raw = raw.get("urgent") or {}
+    if not isinstance(urgent_raw, dict):
+        raise ConfigError("urgent: expected a mapping")
+
+    def _strings(key: str) -> tuple[str, ...]:
+        v = urgent_raw.get(key) or []
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+            raise ConfigError(f"urgent.{key}: expected a list of strings")
+        return tuple(v)
+
+    kanban = raw.get("kanban") or {}
+    if not isinstance(kanban, dict):
+        raise ConfigError("kanban: expected a mapping")
+    state = dict(raw.get("state") or {})
+    if state.get("sql") is not None:
+        sql = state["sql"]
+        if not isinstance(sql, dict) or not (sql.get("url") or sql.get("url_env")):
+            raise ConfigError("state.sql: expected a mapping with url or url_env")
+
     return Config(
+        enforce=Enforce(admission=enforce_raw.get("admission", False),
+                        backstop=enforce_raw.get("backstop", False)),
+        urgent=Urgent(created_by=_strings("created_by"), answered_by=_strings("answered_by"),
+                      title_markers=_strings("title_markers")),
+        kanban=dict(kanban),
         cost_centers=centers,
         timezone=tz,
         target_usd=_number(account.get("target_usd"), "account.target_usd"),
         hard_usd=_number(account.get("hard_usd"), "account.hard_usd"),
         wrap_up=wrap_up,
         ledger=dict(ledger),
-        state=dict(raw.get("state") or {}),
+        state=state,
         pricing=dict(raw.get("pricing") or {}),
         interval_seconds=interval,
         path=path,

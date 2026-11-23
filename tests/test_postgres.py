@@ -76,3 +76,26 @@ def test_literal_percent_in_query(table):
                                     " WHERE ts >= :since AND ts < :until AND source LIKE 'al%'"},
               PriceTable())
     assert {r.source for r in src.rows(*WINDOW)} == {"alpha"}
+
+
+def test_budget_table_and_backstop_on_postgres():
+    from datetime import datetime, timezone
+
+    from hermes_cost_centers import backstop, sql_state
+    from test_enforcement import NOW, budget_state
+
+    table = f"budget_state_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(URL, autocommit=True) as conn:
+        conn.execute(sql_state.DDL.format(table=table))
+    try:
+        assert sql_state.write({"url": URL, "table": table}, budget_state(research="exhausted"), True) == 3
+        b = backstop.Backstop(lambda: psycopg.connect(URL), table=table, cache_seconds=0)
+        d = b.check("researcher", now=NOW)
+        assert not d.allow and "research has spent its $40.00 for 2026-11; resumes 2026-12-01" in d.message
+        assert b.check("ops-bot", now=NOW).allow
+        sql_state.write({"url": URL, "table": table}, budget_state(), True)   # upsert back to ok
+        assert b.check("researcher", now=NOW).allow
+        assert b.check("researcher", now=datetime(2026, 11, 16, 12, 6, tzinfo=timezone.utc)).allow
+    finally:
+        with psycopg.connect(URL, autocommit=True) as conn:
+            conn.execute(f"DROP TABLE {table}")
