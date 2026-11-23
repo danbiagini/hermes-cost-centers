@@ -52,3 +52,44 @@ def test_center_for(write_config):
     cfg = config.load(write_config("cost_centers:\n  line: {sources: [p1, p2]}\n"))
     assert cfg.center_for("p2") == "line"
     assert cfg.center_for("nobody") is None
+
+
+@pytest.mark.parametrize("text,message", [
+    ("[]", "must be a mapping"),
+    ("timezone: Mars/Olympus\ncost_centers: {a: {}}", "timezone"),
+    ("cost_centers: {a: [1]}", "expected a mapping"),
+    ("cost_centers: {a: {sources: [1]}}", "list of names"),
+    ("cost_centers: {a: {monthly_usd: '50'}}", "expected a number"),
+    ("cost_centers: {a: {monthly_usd: true}}", "expected a number"),
+    ("cost_centers: {a: {pace: 5}}", "pace"),
+    ("cost_centers: {a: {pace: {on: maybe}}}", "true or false"),
+    ("thresholds: {wrap_up: 1.5}\ncost_centers: {a: {}}", "between 0 and 1"),
+    ("interval_seconds: 1\ncost_centers: {a: {}}", "at least 5"),
+    ("ledger: {url: x}\ncost_centers: {a: {}}", "ledger.source"),
+])
+def test_bad_values(write_config, text, message):
+    with pytest.raises(config.ConfigError, match=message):
+        config.load(write_config(text))
+
+
+def test_missing_file(tmp_path):
+    with pytest.raises(config.ConfigError, match="no config"):
+        config.load(tmp_path / "nope.yaml")
+
+
+def test_sources_as_string_and_pace_false(write_config):
+    cfg = config.load(write_config("cost_centers: {a: {sources: solo, pace: false}}\n"))
+    assert cfg.cost_centers["a"].sources == ("solo",) and not cfg.cost_centers["a"].pace.on
+
+
+def test_default_path_from_hermes_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_COST_CENTERS_CONFIG", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert config.default_config_path() == tmp_path / "hermes-cost-centers" / "budgets.yaml"
+
+
+def test_bare_on_key_is_honoured(write_config):
+    # YAML parses `on:` as the key True; `pace: {on: false}` must still turn pacing off.
+    cfg = config.load(write_config("pace_default: {on: false}\ncost_centers: {a: {}, b: {pace: {on: true}}}\n"))
+    assert not cfg.cost_centers["a"].pace.on
+    assert cfg.cost_centers["b"].pace.on

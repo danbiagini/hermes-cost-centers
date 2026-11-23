@@ -83,3 +83,27 @@ def test_sql_source_sqlite(tmp_path):
     }, PriceTable())
     got = list(src.rows(*WINDOW))
     assert [(r.cost_usd, r.basis) for r in got] == [(0.5, "billed"), (3.0, "priced"), (None, None)]
+
+
+def test_sql_errors(tmp_path):
+    with pytest.raises(ValueError, match="url"):
+        Sql({"query": "x"}, PriceTable())
+    with pytest.raises(ValueError, match="query"):
+        Sql({"url": "sqlite:///x"}, PriceTable())
+    with pytest.raises(ValueError, match="unsupported"):
+        list(Sql({"url": "mysql://x", "query": "x"}, PriceTable()).rows(*WINDOW))
+    db = tmp_path / "t.db"
+    sqlite3.connect(db).execute("CREATE TABLE t (a)").connection.commit()
+    with pytest.raises(ValueError, match="must return columns"):
+        list(Sql({"url": f"sqlite:///{db}", "query": "SELECT a FROM t"}, PriceTable()).rows(*WINDOW))
+
+
+def test_sql_url_from_env_and_epoch_timestamps(tmp_path, monkeypatch):
+    db = tmp_path / "e.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE t (ts REAL, source TEXT, model TEXT, cost_usd REAL)")
+    conn.execute("INSERT INTO t VALUES (?,?,?,?)", (day(2).timestamp(), "a", "m", 1.0))
+    conn.commit()
+    monkeypatch.setenv("SPEND_URL", f"sqlite:///{db}")
+    (r,) = Sql({"url_env": "SPEND_URL", "query": "SELECT * FROM t"}, PriceTable()).rows(*WINDOW)
+    assert r.ts == day(2) and r.cost_usd == 1.0

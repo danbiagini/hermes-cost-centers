@@ -86,7 +86,8 @@ def _pace(raw: Any, default: Pace, where: str) -> Pace:
         return Pace(on=False, headroom_days=default.headroom_days)
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: expected a mapping, 'off' or false")
-    on = raw.get("on", True)
+    # YAML 1.1 reads a bare `on` key as the boolean True, so accept both.
+    on = raw.get("on", raw.get(True, True))
     if not isinstance(on, bool):
         raise ConfigError(f"{where}.on: expected true or false")
     headroom = _number(raw.get("headroom_days", default.headroom_days), f"{where}.headroom_days")

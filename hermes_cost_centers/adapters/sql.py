@@ -62,7 +62,8 @@ class Sql:
         if self.url.startswith(("postgresql://", "postgres://")):
             import psycopg  # optional dependency
 
-            query = _NAMED.sub(r"%(\1)s", self.query)
+            # psycopg uses %-placeholders, so a literal % (LIKE 'x%') must be doubled first.
+            query = _NAMED.sub(r"%(\1)s", self.query.replace("%", "%%"))
             with psycopg.connect(self.url, connect_timeout=10) as conn:
                 conn.read_only = True
                 with conn.cursor() as cur:

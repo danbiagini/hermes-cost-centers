@@ -104,7 +104,8 @@ Exactly one is authoritative per install.
   takes `:since` and `:until` and returns `ts, source, model, input_tokens,
   output_tokens, cache_read_tokens, cache_write_tokens, cost_usd`. Supports
   `sqlite:///…` and `postgresql://…` (`pip install 'hermes-cost-centers[postgres]'`).
-- **`litellm`**: LiteLLM's spend logs API, for a proxy that runs its database.
+- **`litellm`** (experimental): LiteLLM's spend logs API, for a proxy that runs its
+  database. So far it's tested only against a stubbed response.
 
 ```yaml
 ledger:
@@ -126,6 +127,15 @@ models, including free local ones, in `budgets.yaml`:
 pricing:
   models:
     local: { input: 0, output: 0, cache_read: 0, cache_write: 0 }
+```
+
+## Development
+
+```sh
+python -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+# The Postgres tests run when HCC_TEST_PG_URL points at a scratch database:
+HCC_TEST_PG_URL=postgresql://postgres:test@127.0.0.1:55432/postgres .venv/bin/pytest
 ```
 
 ## License

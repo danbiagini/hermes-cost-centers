@@ -34,3 +34,11 @@ def test_overrides_add_and_replace():
 def test_partial_rates_are_unpriced():
     t = PriceTable(overrides={"half": {"input": 1, "output": 1}})
     assert t.price("half", Tokens(10)) is None
+
+
+def test_table_file_override(tmp_path):
+    f = tmp_path / "prices.json"
+    f.write_text('{"models": {"house": {"input": 1, "output": 2, "cache_read": 0, "cache_write": 0}}}')
+    t = PriceTable.from_config({"table": str(f)})
+    assert t.price("house", Tokens(10**6, 10**6)) == pytest.approx(3.0)
+    assert t.price("claude-sonnet-4-6", Tokens(10**6)) == pytest.approx(3.0)  # shipped rows kept

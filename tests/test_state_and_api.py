@@ -105,3 +105,31 @@ def test_api_runs(configured, client):
     assert client.get("/api/plugins/hermes-cost-centers/cost-centers/nope/runs").status_code == 404
     assert client.get("/api/plugins/hermes-cost-centers/cost-centers/alpha/runs?month=bad").status_code == 400
     assert client.get("/api/plugins/hermes-cost-centers/cost-centers/alpha/runs").status_code == 200
+
+
+def test_failed_write_leaves_old_state_and_no_temp_file(tmp_path, monkeypatch):
+    p = tmp_path / "state.json"
+    state.write(p, {"v": 1})
+
+    def broken_dump(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state.json, "dump", broken_dump)
+    with pytest.raises(OSError):
+        state.write(p, {"v": 2})
+    monkeypatch.undo()
+    assert state.read(p) == {"v": 1}
+    assert [f.name for f in tmp_path.iterdir()] == ["state.json"]
+
+
+def test_api_bad_config_is_503(write_config, monkeypatch, client):
+    monkeypatch.setenv("HERMES_COST_CENTERS_CONFIG", str(write_config("cost_centers: {}\n")))
+    r = client.get("/api/plugins/hermes-cost-centers/state")
+    assert r.status_code == 503 and "at least one" in r.json()["detail"]
+
+
+def test_api_unattributed(configured, client):
+    assert client.get("/api/plugins/hermes-cost-centers/unattributed").json() == {"unattributed": {}}
+    cli.main(["evaluate"])
+    body = client.get("/api/plugins/hermes-cost-centers/unattributed").json()
+    assert "default" in body["unattributed"]

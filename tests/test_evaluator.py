@@ -118,3 +118,72 @@ cost_centers:
     def test_runs_counted(self):
         s = evaluate(self.C, [row("p1", 1, run="a"), row("p1", 1, run="b"), row("p2", 1, run="a")], self.NOW)
         assert s["cost_centers"]["line"]["runs"] == 2
+
+
+class TestMonthEnd:
+    """The last days of a month, where the allowance reaches its cap."""
+
+    def test_cap_reached_headroom_days_before_the_end(self):
+        # With 5 days of headroom the allowance equals the budget from day 27 on.
+        assert allowance(50, DEC, dt("2026-12-27T00:00:00"), 5) == pytest.approx(50)
+        assert allowance(50, DEC, dt("2026-12-26T23:00:00"), 5) < 50
+
+    def test_under_budget_after_the_cap_is_never_ahead(self):
+        c = cfg("cost_centers:\n  a: {monthly_usd: 50}\n")
+        s = evaluate(c, [row("a", 49.99, when="2026-12-02T00:00:00")], dt("2026-12-28T00:00:00"))
+        assert s["cost_centers"]["a"]["pace"]["ahead_of_pace"] is False
+        assert s["cost_centers"]["a"]["state"] == "wrap_up"
+
+    def test_last_second_of_the_month_still_counts(self):
+        c = cfg("cost_centers:\n  a: {monthly_usd: 50}\n")
+        s = evaluate(c, [row("a", 1, when="2026-12-31T23:59:59")], dt("2026-12-31T23:59:59"))
+        assert s["cost_centers"]["a"]["spend_usd"] == 1
+
+    def test_december_rolls_into_january(self):
+        assert DEC.end == dt("2027-01-01T00:00:00") and DEC.days == 31
+
+    def test_zero_headroom_allows_only_the_elapsed_share(self):
+        assert allowance(31, DEC, dt("2026-12-11T00:00:00"), 0) == pytest.approx(10)
+
+
+class TestTimezone:
+    C = cfg("timezone: America/New_York\ncost_centers:\n  a: {monthly_usd: 30}\n")
+
+    def test_month_starts_at_local_midnight(self):
+        m = Month.containing(dt("2026-12-01T03:00:00"), self.C.timezone)
+        assert m.label == "2026-11"  # 22:00 on Nov 30 in New York
+        assert m.start == dt("2026-11-01T04:00:00")  # EDT
+        assert m.end == dt("2026-12-01T05:00:00")  # EST
+
+    def test_rows_assigned_by_local_month(self):
+        rows = [row("a", 1, when="2026-12-01T03:00:00"),   # Nov 30, local
+                row("a", 2, when="2026-12-01T06:00:00")]   # Dec 1, local
+        nov = evaluate(self.C, rows, dt("2026-12-01T04:00:00"))
+        dec = evaluate(self.C, rows, dt("2026-12-01T07:00:00"))
+        assert nov["month"]["label"] == "2026-11" and nov["cost_centers"]["a"]["spend_usd"] == 1
+        assert dec["month"]["label"] == "2026-12" and dec["cost_centers"]["a"]["spend_usd"] == 2
+
+    def test_dst_month_pace_uses_real_time(self):
+        # November in New York is 30 days plus the hour gained when DST ends.
+        m = Month.containing(dt("2026-11-15T12:00:00"), self.C.timezone)
+        assert (m.end - m.start).total_seconds() == (30 * 24 + 1) * 3600
+        assert allowance(30, m, m.end, 5) == 30
+        assert allowance(30, m, m.start, 0) == 0
+
+
+class TestEdges:
+    def test_zero_budget_is_exhausted(self):
+        c = cfg("cost_centers:\n  a: {monthly_usd: 0}\n")
+        s = evaluate(c, [], dt("2026-11-16T00:00:00"))
+        assert s["cost_centers"]["a"]["state"] == "exhausted" and s["cost_centers"]["a"]["pace"] is None
+
+    def test_unpriced_unattributed_row(self):
+        c = cfg("cost_centers:\n  a: {}\n")
+        s = evaluate(c, [row("x", None)], dt("2026-11-16T00:00:00"))
+        assert s["unattributed"]["x"] == {"spend_usd": 0, "rows": 1, "unpriced_rows": 1}
+        assert s["account"]["incomplete"]
+
+    def test_no_crossing_at_the_first_instant(self):
+        c = cfg("account: {target_usd: 10}\ncost_centers:\n  a: {}\n")
+        s = evaluate(c, [row("a", 1, when="2026-11-01T00:00:00")], dt("2026-11-01T00:00:00"))
+        assert s["account"]["crosses_target_at"] is None

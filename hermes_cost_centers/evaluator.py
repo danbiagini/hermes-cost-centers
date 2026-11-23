@@ -38,11 +38,15 @@ class Month:
             end = start.replace(year=local.year + 1, month=1)
         else:
             end = start.replace(month=local.month + 1)
-        return cls(start, end, days)
+        # Aware datetimes in the same zone subtract as wall-clock time, which
+        # loses or gains the DST hour. Keep the boundaries in UTC.
+        return cls(start.astimezone(timezone.utc), end.astimezone(timezone.utc), days, tz)
+
+    tz: object = timezone.utc
 
     @property
     def label(self) -> str:
-        return self.start.strftime("%Y-%m")
+        return self.start.astimezone(self.tz).strftime("%Y-%m")
 
     def fraction(self, t: datetime) -> float:
         total = (self.end - self.start).total_seconds()
