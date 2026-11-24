@@ -153,6 +153,18 @@ things, failing silently on either:
 The agent's source is its profile name, or `HERMES_COST_CENTERS_SOURCE` when the
 ledger knows it by another name.
 
+Hermes adds a note to the model's input without saving it to the session's
+history, so the plugin logs one line each time it gives one, to the profile's
+`agent.log`:
+`budget note given: kind=start session=<id> cost_center=research state=ok ahead_of_pace=False`
+(`kind` is `start`, `changed` or `mid_run`). A first turn that gets no note logs
+`budget note not given` with the reason, such as a stale state file.
+
+Because it is guidance, the plugin needs no protection from the agent it runs
+in. A profile that owns its own files can edit or disable it, just as it can
+edit its own `config.yaml`. That changes only what the agent is told, never
+what admission or the backstop allow.
+
 ```sh
 cp -r agent <profile home>/plugins/hermes-cost-centers-agent
 # in that profile's config.yaml:

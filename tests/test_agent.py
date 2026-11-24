@@ -215,6 +215,28 @@ def test_no_mid_run_note_before_the_start_note(live):
     assert agent._on_transform_tool_result(session_id="new", result="x", tool_name="t") is None
 
 
+def test_every_note_given_leaves_one_log_line(live, caplog):
+    # Hermes does not save hook context to the session, so the log is the only record.
+    _, put = live
+    caplog.set_level("INFO", logger="hermes_cost_centers.agent")
+    agent._on_pre_llm_call(session_id="s1", is_first_turn=True)
+    put(state="wrap_up", spend=42.0, allowance=48.0)
+    agent._on_transform_tool_result(session_id="s1", result="out", tool_name="terminal")
+    agent._on_transform_tool_result(session_id="s1", result="out", tool_name="terminal")
+    given = [r.getMessage() for r in caplog.records if "note given" in r.getMessage()]
+    assert len(given) == 2
+    assert "kind=start session=s1 cost_center=research state=ok" in given[0]
+    assert "kind=mid_run session=s1 cost_center=research state=wrap_up" in given[1]
+
+
+def test_a_first_turn_without_a_note_says_why(live, caplog, monkeypatch):
+    monkeypatch.setenv("HERMES_COST_CENTERS_SOURCE", "stranger")
+    caplog.set_level("INFO", logger="hermes_cost_centers.agent")
+    assert agent._on_pre_llm_call(session_id="s1", is_first_turn=True) is None
+    assert any("note not given: session=s1" in r.getMessage() and "no cost center" in r.getMessage()
+               for r in caplog.records)
+
+
 def test_hooks_never_raise(live, monkeypatch):
     monkeypatch.setattr(agent, "status", lambda *a, **k: 1 / 0)
     assert agent._on_pre_llm_call(session_id="s1", is_first_turn=True) is None
