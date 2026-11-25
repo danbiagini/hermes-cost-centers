@@ -277,6 +277,16 @@ def _remember(session_id: str, sig: tuple) -> None:
         _seen[session_id] = sig
 
 
+def _log_note(kind: str, session_id: str, s: dict) -> None:
+    """One log line per note given, so an operator can see the agent was told.
+    Hermes adds hook context to the model's input without saving it to the
+    session's history, so this line is the only record that a note went out."""
+    pace = s.get("pace") or {}
+    log.info("budget note given: kind=%s session=%s cost_center=%s state=%s ahead_of_pace=%s",
+             kind, session_id or "-", s.get("cost_center"), s.get("state"),
+             bool(pace.get("ahead_of_pace")))
+
+
 def _budget_status_tool(args: dict, **kwargs) -> str:
     try:
         s = status(kwargs.get("session_id") or "")
@@ -299,6 +309,11 @@ def _on_pre_llm_call(session_id: str = "", is_first_turn: bool = False, **_: Any
         text = note(s)
         if session_id:
             _remember(session_id, sig)
+        if text:
+            _log_note("start" if is_first_turn else "changed", session_id, s)
+        elif is_first_turn:
+            log.info("budget note not given: session=%s %s", session_id or "-",
+                     s.get("detail") or "nothing to say")
         return {"context": text} if text else None
     except Exception:
         return None
@@ -325,8 +340,12 @@ def _on_transform_tool_result(session_id: str = "", result: Any = None, tool_nam
         worse = (sig[1] in _WORSE and sig[1] != told[1]) or (sig[2] and not told[2])
         if not worse:
             return None
-        text = note(status(session_id))
-        return f"{result}\n\n{text}" if text else None
+        s = status(session_id)
+        text = note(s)
+        if not text:
+            return None
+        _log_note("mid_run", session_id, s)
+        return f"{result}\n\n{text}"
     except Exception:
         return None
 
