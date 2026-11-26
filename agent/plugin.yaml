@@ -1,5 +1,5 @@
 name: hermes-cost-centers-agent
-version: 0.1.0.dev0
+version: 0.1.0
 description: "Lets an agent see its cost center's budget: a budget_status tool, a one-line note at the start of a run, and one note mid-run if the budget's state changes. Guidance only: enforcement runs outside the agent."
 author: Dan Biagini
 kind: standalone
