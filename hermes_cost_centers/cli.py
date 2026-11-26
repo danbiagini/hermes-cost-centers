@@ -34,7 +34,7 @@ def evaluate_once(cfg: config_mod.Config, now: datetime | None = None,
     now = now or evaluator.utcnow()
     month = Month.containing(now, cfg.timezone)
     adapter = get_adapter(cfg)
-    rows = list(adapter.rows(month.start, now))
+    rows = list(adapter.rows(evaluator.lookback_start(cfg, month, now), now))
     state = evaluate(cfg, rows, now, ledger_name=adapter.name)
     # The agent plugin prices its own run's tokens with the same table, so the
     # operator's overrides reach it without a second copy.

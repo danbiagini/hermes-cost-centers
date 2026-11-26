@@ -132,17 +132,49 @@ def _center_state(center: CostCenter, rows: list[Row], month: Month, now: dateti
     return out
 
 
-def _crossing(spend: float, target: Optional[float], month: Month, now: datetime) -> Optional[str]:
-    """The date the account crosses ``target`` at this month's average rate."""
+DAILY_DAYS = 7  # days of the account's daily series in the state
+
+
+def lookback_start(config: Config, month: Month, now: datetime) -> datetime:
+    """How far back the ledger is read: the month, and far enough before it for
+    the trailing projection and the daily series."""
+    days = max(DAILY_DAYS, config.projection_days or 0)
+    return min(month.start, now - timedelta(days=days))
+
+
+def _rate(total: float, window_total: float, config: Config, month: Month, now: datetime) -> Optional[float]:
+    """Dollars a day the projection runs at, or None before the month has begun."""
+    if config.projection_days:
+        return window_total / config.projection_days
+    elapsed_days = (now - month.start).total_seconds() / 86400
+    return total / elapsed_days if elapsed_days > 0 else None
+
+
+def _crossing(spend: float, target: Optional[float], rate: Optional[float], month: Month,
+              now: datetime) -> Optional[str]:
+    """When the account crosses ``target`` at ``rate``: "crossed", a time, or None
+    if it doesn't this month."""
     if target is None or spend <= 0:
         return None
     if spend >= target:
         return "crossed"
-    elapsed = (now - month.start).total_seconds()
-    if elapsed <= 0:
+    if not rate or rate <= 0:
         return None
-    t = month.start + timedelta(seconds=elapsed * target / spend)
+    t = now + timedelta(days=(target - spend) / rate)
     return _iso(t) if t < month.end else None
+
+
+def _daily(rows: list, config: Config, now: datetime) -> list[dict]:
+    """Spend per day for the last DAILY_DAYS days, oldest first, days with none
+    included, so a reader sees the outlier that drives a trailing rate."""
+    today = now.astimezone(config.timezone).date()
+    days = [(today - timedelta(days=i)).isoformat() for i in range(DAILY_DAYS - 1, -1, -1)]
+    sums = dict.fromkeys(days, 0.0)
+    for r in rows:
+        d = r.ts.astimezone(config.timezone).date().isoformat()
+        if d in sums and r.priced:
+            sums[d] += r.cost_usd
+    return [{"date": d, "spend_usd": _round(sums[d])} for d in days]
 
 
 def evaluate(config: Config, rows: Iterable[Row], now: Optional[datetime] = None,
@@ -153,6 +185,10 @@ def evaluate(config: Config, rows: Iterable[Row], now: Optional[datetime] = None
     unattributed: dict[str, dict] = {}
     total = 0.0
     unpriced = 0
+    rows = list(rows)
+    window_start = now - timedelta(days=config.projection_days or 0)
+    window_total = sum(r.cost_usd for r in rows
+                       if r.priced and config.projection_days and window_start <= r.ts <= now)
     for r in rows:
         if not month.start <= r.ts < month.end:
             continue
@@ -177,6 +213,8 @@ def evaluate(config: Config, rows: Iterable[Row], now: Optional[datetime] = None
     }
     for u in unattributed.values():
         u["spend_usd"] = _round(u["spend_usd"])
+    rate = _rate(total, window_total, config, month, now)
+    days_left = max(0.0, (month.end - now).total_seconds() / 86400)
     return {
         "version": STATE_VERSION,
         "generated_at": _iso(now),
@@ -190,7 +228,14 @@ def evaluate(config: Config, rows: Iterable[Row], now: Optional[datetime] = None
             "hard_usd": config.hard_usd,
             "incomplete": unpriced > 0,
             "unpriced_rows": unpriced,
-            "crosses_target_at": _crossing(total, config.target_usd, month, now),
+            "crosses_target_at": _crossing(total, config.target_usd, rate, month, now),
+            "projection": {
+                "basis": f"trailing {config.projection_days:g} days" if config.projection_days
+                         else "month to date",
+                "rate_usd_per_day": None if rate is None else _round(rate),
+                "at_month_end_usd": None if rate is None else _round(total + rate * days_left),
+            },
+            "daily": _daily(rows, config, now),
         },
         "cost_centers": centers,
         "unattributed": unattributed,
