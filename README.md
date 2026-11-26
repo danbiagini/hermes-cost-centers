@@ -98,7 +98,9 @@ enforce: {admission: false, backstop: false}   # flip each to true when ready
   `hermes_cost_centers/sql_state.py`). `hermes_cost_centers.backstop.Backstop`
   looks a call's source up there and, if its cost center is exhausted, refuses
   with HTTP 402 and *"budget exhausted: … (hard billing limit)"*. It never raises
-  and fails open on a missing, stale or unreadable row.
+  and fails open on a missing, stale or unreadable row. Each refusal logs a
+  warning, `REFUSED <source>: …`, on the `hermes_cost_centers.backstop` logger;
+  in a dry run the line is `DRY RUN, would refuse <source>: …`.
 
   ```python
   # LiteLLM custom_auth, after you've resolved the caller's source:

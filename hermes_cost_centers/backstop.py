@@ -111,4 +111,7 @@ class Backstop:
             return ALLOW
         if d.would_refuse:
             log.warning("DRY RUN, would refuse %s: %s", source, d.message)
+        elif not d.allow:
+            # The caller sees only the 402; this line is the operator's record.
+            log.warning("REFUSED %s: %s", source, d.message)
         return d
