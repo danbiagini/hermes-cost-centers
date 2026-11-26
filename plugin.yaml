@@ -1,4 +1,4 @@
 name: hermes-cost-centers
-version: 0.1.0.dev0
+version: 0.1.0
 description: "Cost accounting and budgets per cost center: one profile, or a group of profiles and spend sources. Adds a read-only Budgets tab to the dashboard."
 author: Dan Biagini

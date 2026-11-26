@@ -3,7 +3,7 @@
   "label": "Budgets",
   "description": "Spend per cost center against its monthly budget and pace. Read-only.",
   "icon": "BarChart3",
-  "version": "0.1.0-dev",
+  "version": "0.1.0",
   "tab": { "path": "/budgets", "position": "after:analytics" },
   "slots": ["analytics:bottom"],
   "entry": "dist/index.js",
