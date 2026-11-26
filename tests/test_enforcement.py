@@ -266,6 +266,13 @@ class TestTableAndBackstop:
         sql_state.write({"url": f"sqlite:///{db}"}, st, enforce)
         return backstop.Backstop(lambda: sqlite3.connect(db), paramstyle="?", cache_seconds=0)
 
+    def test_enforced_refusal_leaves_a_log_line(self, tmp_path, caplog):
+        b = self.backstop_for(tmp_path, budget_state(research="exhausted"), True)
+        assert not b.check("researcher", now=NOW).allow
+        assert "REFUSED researcher: budget exhausted: research" in caplog.text
+        caplog.clear()
+        assert b.check("ops-bot", now=NOW).allow and not caplog.text
+
     def test_enforced_refusal_message(self, tmp_path):
         b = self.backstop_for(tmp_path, budget_state(research="exhausted"), True)
         d = b.check("researcher", now=NOW)
