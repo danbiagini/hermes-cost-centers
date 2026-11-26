@@ -190,6 +190,7 @@ evaluator refuses a file that anyone but its owner can write.
 timezone: UTC                    # when "the 1st" begins
 account:
   target_usd: 150                # the whole account's monthly target (shown, never enforced)
+  projection_days: 7             # project the crossing at the last 7 days' rate; omit for the month average
 cost_centers:
   research:                      # one profile: sources defaults to [research]
     monthly_usd: 50
@@ -205,6 +206,12 @@ thresholds: { wrap_up: 0.80 }
 ledger: { source: hermes-sessions }
 state: { path: /var/lib/hermes-cost-centers/state.json }
 ```
+
+The state's `account` carries the projection (its basis, the daily rate and the
+figure at month end) and spend for each of the last 7 days. A script that
+reports spend can read these instead of summing the ledger a second time. To
+fill them, the evaluator reads the ledger from 7 days (or `projection_days`, if
+longer) before now, and only the current month counts toward spend.
 
 ### Ledger sources
 

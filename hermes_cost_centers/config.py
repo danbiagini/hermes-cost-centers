@@ -69,6 +69,9 @@ class Config:
     timezone: ZoneInfo
     target_usd: Optional[float] = None
     hard_usd: Optional[float] = None
+    # Days of trailing spend the account projection runs at; None is the
+    # month-to-date average.
+    projection_days: Optional[float] = None
     wrap_up: float = 0.80
     ledger: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)
@@ -168,6 +171,9 @@ def parse(raw: Any, path: Optional[Path] = None) -> Config:
         )
 
     account = raw.get("account") or {}
+    projection_days = _number(account.get("projection_days"), "account.projection_days")
+    if projection_days == 0:
+        raise ConfigError("account.projection_days: must be more than 0, or null for the month average")
     thresholds = raw.get("thresholds") or {}
     wrap_up = _number(thresholds.get("wrap_up", 0.80), "thresholds.wrap_up")
     if not 0 < wrap_up <= 1:
@@ -217,6 +223,7 @@ def parse(raw: Any, path: Optional[Path] = None) -> Config:
         timezone=tz,
         target_usd=_number(account.get("target_usd"), "account.target_usd"),
         hard_usd=_number(account.get("hard_usd"), "account.hard_usd"),
+        projection_days=projection_days,
         wrap_up=wrap_up,
         ledger=dict(ledger),
         state=state,

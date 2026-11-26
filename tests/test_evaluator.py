@@ -187,3 +187,57 @@ class TestEdges:
         c = cfg("account: {target_usd: 10}\ncost_centers:\n  a: {}\n")
         s = evaluate(c, [row("a", 1, when="2026-11-01T00:00:00")], dt("2026-11-01T00:00:00"))
         assert s["account"]["crosses_target_at"] is None
+
+
+class TestTrailingProjection:
+    """The account's crossing date runs at the last N days' rate when the
+    operator sets account.projection_days: an early heavy week must not keep
+    projecting a crossing after spend has slowed, nor a late surge be averaged away."""
+
+    C = cfg("account: {target_usd: 100, projection_days: 7}\ncost_centers:\n  a: {sources: [a]}\n")
+    NOW = dt("2026-11-16T00:00:00")
+
+    def test_a_quiet_last_week_does_not_cross_after_a_heavy_start(self):
+        # $60 on the 2nd, nothing since: the month average would cross on ~the 25th.
+        s = evaluate(self.C, [row("a", 60, when="2026-11-02T00:00:00")], self.NOW)
+        assert s["account"]["crosses_target_at"] is None
+        assert s["account"]["projection"]["rate_usd_per_day"] == 0
+
+    def test_a_late_surge_crosses_sooner_than_the_average_says(self):
+        # $63 in the last 7 days = $9/day, against a month average of about $3.94.
+        rows = [row("a", 14, when="2026-11-10T00:00:00"), row("a", 49, when="2026-11-15T00:00:00")]
+        s = evaluate(self.C, rows, self.NOW)
+        # $37 left at $9/day: about 4.1 days, the 20th.
+        crossing = datetime.fromisoformat(s["account"]["crosses_target_at"])
+        assert dt("2026-11-20T00:00:00") <= crossing <= dt("2026-11-20T06:00:00")
+        assert s["account"]["projection"]["basis"] == "trailing 7 days"
+        assert s["account"]["projection"]["at_month_end_usd"] == pytest.approx(63 + 9 * 15)  # 15 days left
+
+    def test_the_window_reaches_into_last_month_but_spend_does_not(self):
+        now = dt("2026-12-03T00:00:00")
+        s = evaluate(self.C, [row("a", 70, when="2026-11-28T00:00:00")], now)
+        assert s["account"]["spend_usd"] == 0 and s["cost_centers"]["a"]["spend_usd"] == 0
+        assert s["account"]["projection"]["rate_usd_per_day"] == pytest.approx(10)
+
+    def test_unset_means_the_month_average(self):
+        c = cfg("account: {target_usd: 100}\ncost_centers:\n  a: {sources: [a]}\n")
+        s = evaluate(c, [row("a", 60, when="2026-11-02T00:00:00")], self.NOW)
+        assert s["account"]["projection"]["basis"] == "month to date"
+        assert s["account"]["crosses_target_at"] is not None
+
+    def test_zero_days_is_refused(self):
+        with pytest.raises(config.ConfigError):
+            cfg("account: {projection_days: 0}\ncost_centers:\n  a: {}\n")
+
+    def test_daily_series_is_seven_days_with_the_quiet_ones(self):
+        rows = [row("a", 5, when="2026-11-15T10:00:00"), row("a", 2, when="2026-11-09T23:00:00"),
+                row("a", 99, when="2026-11-08T12:00:00")]  # outside the 7 days
+        daily = evaluate(self.C, rows, dt("2026-11-15T12:00:00"))["account"]["daily"]
+        assert [d["date"] for d in daily] == [f"2026-11-{n:02d}" for n in range(9, 16)]
+        assert [d["spend_usd"] for d in daily] == [2, 0, 0, 0, 0, 0, 5]
+
+    def test_the_ledger_is_read_far_enough_back(self):
+        from hermes_cost_centers.evaluator import lookback_start
+        month = Month.containing(dt("2026-12-03T00:00:00"), UTC)
+        assert lookback_start(self.C, month, dt("2026-12-03T00:00:00")) == dt("2026-11-26T00:00:00")
+        assert lookback_start(self.C, month, dt("2026-12-20T00:00:00")) == month.start
